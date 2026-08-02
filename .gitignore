@@ -1,0 +1,13 @@
+# 원본 저장소 클론 (upstream 코드 — 우리 저장소에 포함하지 않음)
+repo/
+
+# 실행 산출물
+outputs/
+*.mp4
+*.npy
+*.pt
+
+# 시스템
+.DS_Store
+__pycache__/
+*.pyc
