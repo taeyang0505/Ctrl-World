@@ -82,15 +82,27 @@ def build_agent(a):
     from rollout_replay_traj import agent as Agent
 
     args = wm_args(task_type="replay")
-    args.svd_model_path = a.svd_model_path
-    args.clip_model_path = a.clip_model_path
-    args.ckpt_path = a.ckpt_path
-    args.val_model_path = a.ckpt_path
-    args.dataset_root_path = a.dataset_root_path
-    args.dataset_meta_info_path = a.dataset_meta_info_path or os.path.join(REPO, "dataset_meta_info")
+    args.svd_model_path = os.path.expanduser(a.svd_model_path)
+    args.clip_model_path = os.path.expanduser(a.clip_model_path)
+    args.ckpt_path = os.path.expanduser(a.ckpt_path)
+    args.val_model_path = args.ckpt_path          # 원본은 이 이름으로 체크포인트를 읽는다
+    args.dataset_root_path = os.path.expanduser(a.dataset_root_path)
+    args.dataset_meta_info_path = os.path.expanduser(
+        a.dataset_meta_info_path or os.path.join(REPO, "dataset_meta_info"))
     args.dataset_names = a.dataset_names
-    args.val_dataset_dir = a.dataset_root_path
+    args.val_dataset_dir = args.dataset_root_path
     args.interact_num = a.interact_num
+
+    # config.py 의 data_stat_path 는 'dataset_meta_info/droid/stat.json' 같은 상대 경로라
+    # 실행 위치에 따라 깨진다. 절대 경로로 바꿔 준다.
+    # 이 통계(state_p01/p99)는 액션 정규화에 쓰이므로 반드시 원본 값을 써야 한다.
+    args.data_stat_path = os.path.join(
+        args.dataset_meta_info_path, a.dataset_names, "stat.json")
+    if not os.path.exists(args.data_stat_path):
+        sys.exit(f"정규화 통계를 찾을 수 없습니다: {args.data_stat_path}\n"
+                 f"  --dataset_meta_info_path 와 --dataset_names 를 확인하세요.")
+    print(f"정규화 통계: {args.data_stat_path}")
+
     return Agent(args), args
 
 
