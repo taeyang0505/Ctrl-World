@@ -149,7 +149,10 @@ echo "  pip        : $(python -m pip --version)"
 echo ""
 echo "[2/5] torch 2.7.1 + cu128 설치"
 python -m pip install --upgrade pip
-python -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cu128
+# torchvision 은 torchmetrics 의 LPIPS 가 요구한다. torch 2.7.1 의 짝은 0.22.1 이고
+# 반드시 같은 cu128 인덱스에서 받아야 빌드가 어긋나지 않는다.
+python -m pip install "torch==2.7.1" "torchvision==0.22.1" \
+  --index-url https://download.pytorch.org/whl/cu128
 
 echo "  -- torch/CUDA 확인 --"
 python - <<'PY'
