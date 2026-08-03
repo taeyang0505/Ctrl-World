@@ -71,8 +71,11 @@ def parse_args():
     ap.add_argument("--lpips_net", default="alex", choices=["alex", "vgg"])
     ap.add_argument("--no_fid", action="store_true", help="FID 생략 (빠른 확인용)")
     ap.add_argument("--out", default="results/table1")
-    ap.add_argument("--save_arrays", action="store_true",
-                    help="예측/정답 배열을 npz로 저장 (용량 큼)")
+    ap.add_argument("--cache_dir", default=None,
+                    help="클립별 예측/정답 배열 저장 위치. 기본 <out>/cache. "
+                         "재실행 시 캐시가 있으면 롤아웃을 건너뛴다")
+    ap.add_argument("--no_cache", action="store_true",
+                    help="캐시를 쓰지 않는다 (디스크 절약, 재실행 시 전부 다시 롤아웃)")
     return ap.parse_args()
 
 
@@ -203,25 +206,59 @@ def main() -> None:
           f"num_history={args.num_history} → 최대 {(args.pred_step-1)*args.interact_num}프레임 "
           f"({(args.pred_step-1)*args.interact_num*0.2:.1f}초)")
 
+    # 롤아웃 결과는 클립마다 즉시 디스크에 저장한다.
+    # 지표 계산에서 실패해도 몇 시간짜리 롤아웃을 잃지 않기 위해서다.
+    cache_dir = None
+    if not a.no_cache:
+        cache_dir = os.path.expanduser(a.cache_dir or os.path.join(a.out, "cache"))
+        os.makedirs(cache_dir, exist_ok=True)
+        print(f"캐시: {cache_dir} (재실행 시 이미 있는 클립은 롤아웃을 건너뜁니다)")
+
     per_view = {v: {"pred": [], "gt": []} for v in a.views}
-    ok, t0 = 0, time.time()
+    ok, cached, t0 = 0, 0, time.time()
 
     for n, vid in enumerate(ids, 1):
-        r = rollout_one(Agent, args, vid, a.start_idx, a)
+        cpath = os.path.join(cache_dir, f"{vid}.npz") if cache_dir else None
+
+        r = None
+        if cpath and os.path.exists(cpath):
+            try:
+                z = np.load(cpath)
+                r = {"pred": z["pred"], "gt": z["gt"], "n_frames": int(z["pred"].shape[1])}
+                cached += 1
+            except Exception:  # noqa: BLE001
+                r = None  # 손상된 캐시는 무시하고 다시 롤아웃
+
         if r is None:
-            continue
+            r = rollout_one(Agent, args, vid, a.start_idx, a)
+            if r is None:
+                continue
+            if cpath:
+                np.savez_compressed(cpath, pred=r["pred"], gt=r["gt"])
+
         ok += 1
         for v in a.views:
             per_view[v]["pred"].append(r["pred"][v])
             per_view[v]["gt"].append(r["gt"][v])
         el = time.time() - t0
-        print(f"  [{n}/{len(ids)}] {vid}  {r['n_frames']}프레임  "
+        tag = "캐시" if cpath and os.path.exists(cpath) and cached else ""
+        print(f"  [{n}/{len(ids)}] {vid}  {r['n_frames']}프레임 {tag} "
               f"경과 {el/60:.1f}분  남은 예상 {(el/n)*(len(ids)-n)/60:.1f}분")
 
     if ok == 0:
         sys.exit("성공한 클립이 없습니다.")
+    if cached:
+        print(f"\n캐시에서 불러온 클립: {cached}/{ok}")
 
-    from metrics import compute_all
+    from metrics import compute_psnr_ssim, compute_lpips, compute_fid
+
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    out_json = os.path.join(a.out, "table1.json")
+
+    def save_partial(res: dict) -> None:
+        """지표를 하나 계산할 때마다 저장한다. 뒤에서 실패해도 앞의 결과는 남는다."""
+        with open(out_json, "w", encoding="utf-8") as f:
+            json.dump({"진행중": True, "results": res}, f, indent=2, ensure_ascii=False)
 
     results = {}
     for v in a.views:
@@ -229,14 +266,32 @@ def main() -> None:
         gt = np.stack(per_view[v]["gt"], axis=0)
         name = {0: "third_view(exterior_1)", 1: "exterior_2", 2: "wrist_view"}.get(v, f"view{v}")
         print(f"\n지표 계산 — {name}  shape={pred.shape}")
-        results[name] = compute_all(
-            pred, gt,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            with_fid=not a.no_fid,
-            lpips_net=a.lpips_net,
-        )
-        if a.save_arrays:
-            np.savez_compressed(os.path.join(a.out, f"arrays_view{v}.npz"), pred=pred, gt=gt)
+        r: dict = {}
+
+        # 지표마다 따로 감싼다. 하나가 실패해도 나머지는 살린다.
+        for label, fn in (
+            ("PSNR/SSIM", lambda: compute_psnr_ssim(pred, gt, device=dev)),
+            ("LPIPS", lambda: compute_lpips(pred, gt, net=a.lpips_net, device=dev)),
+        ):
+            try:
+                r.update(fn())
+                print(f"  {label} 완료")
+            except Exception as exc:  # noqa: BLE001
+                r[f"{label}_error"] = f"{type(exc).__name__}: {exc}"
+                print(f"  !! {label} 실패: {type(exc).__name__}: {str(exc)[:120]}")
+            results[name] = r
+            save_partial(results)
+
+        if not a.no_fid:
+            try:
+                r.update(compute_fid(pred, gt, device=dev))
+                print("  FID 완료")
+            except Exception as exc:  # noqa: BLE001
+                r["fid_error"] = f"{type(exc).__name__}: {exc}"
+                print(f"  !! FID 실패: {type(exc).__name__}: {str(exc)[:160]}")
+                print("     (torch-fidelity 가 필요하면: pip install torch-fidelity)")
+            results[name] = r
+            save_partial(results)
 
     summary = {
         "n_clips_requested": len(ids),
@@ -250,22 +305,28 @@ def main() -> None:
         "interact_num": args.interact_num,
         "paper_table1": {"psnr": 23.56, "ssim": 0.828, "lpips": 0.091,
                          "fid": 25.00, "fvd": 97.4},
+        "n_clips_from_cache": cached,
+        "cache_dir": cache_dir,
         "results": results,
     }
-    out_json = os.path.join(a.out, "table1.json")
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    def fmt(x, w=7, p=2):
+        return f"{x:{w}.{p}f}" if isinstance(x, (int, float)) else f"{'—':>{w}s}"
 
     print("\n" + "=" * 62)
     print(f"{'':22s} {'PSNR':>7s} {'SSIM':>7s} {'LPIPS':>7s} {'FID':>7s}")
     for name, r in results.items():
-        print(f"{name:22s} {r['psnr']:7.2f} {r['ssim']:7.3f} {r['lpips']:7.3f} "
-              f"{r.get('fid', float('nan')):7.2f}")
+        print(f"{name:22s} {fmt(r.get('psnr'))} {fmt(r.get('ssim'),7,3)} "
+              f"{fmt(r.get('lpips'),7,3)} {fmt(r.get('fid'))}")
     p = summary["paper_table1"]
     print(f"{'논문 Table 1':22s} {p['psnr']:7.2f} {p['ssim']:7.3f} {p['lpips']:7.3f} {p['fid']:7.2f}")
     print("=" * 62)
     print(f"클립 {ok}/{len(ids)}개 · 클립당 {summary['frames_per_clip']}프레임 "
           f"({summary['seconds_per_clip']}초) · 저장: {out_json}")
+    if cache_dir:
+        print(f"캐시 유지: {cache_dir}  (같은 명령을 다시 실행하면 롤아웃 없이 지표만 재계산)")
 
 
 if __name__ == "__main__":
