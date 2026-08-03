@@ -11,6 +11,8 @@ set -euo pipefail
 
 ENV_NAME="${ENV_NAME:-ctrl-world}"
 CKPT_DIR="${CKPT_DIR:-$HOME/ckpt/ctrl-world}"
+# HF 캐시가 홈에 중복으로 쌓이는 것을 막는다. 지정하지 않으면 체크포인트 옆에 둔다.
+export HF_HOME="${HF_HOME:-$(dirname "$CKPT_DIR")/hf_cache}"
 DOWNLOAD_CKPT=1
 [[ "${1:-}" == "--no-ckpt" ]] && DOWNLOAD_CKPT=0
 
@@ -18,6 +20,7 @@ echo "=============================================="
 echo " Ctrl-World 환경 구성"
 echo "  env      : $ENV_NAME"
 echo "  ckpt dir : $CKPT_DIR"
+echo "  HF_HOME  : $HF_HOME"
 echo "=============================================="
 
 # ---------------------------------------------------------------
@@ -28,6 +31,28 @@ echo "[0/5] GPU 확인"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv || {
   echo "  !! nvidia-smi 실패. GPU 머신에서 실행하고 있는지 확인하세요."; exit 1; }
 echo "  * RTX 5090 / RTX PRO 6000 Blackwell은 드라이버 570 이상 필요"
+
+# ---------------------------------------------------------------
+# 0b. 디스크 여유 확인 — 공유 서버에서 루트 파티션을 채우면 전체 장애가 난다
+# ---------------------------------------------------------------
+if [[ "$DOWNLOAD_CKPT" == "1" ]]; then
+  echo ""
+  echo "[0b] 디스크 여유 확인 (체크포인트 약 17GB + 여유분)"
+  TARGET_PARENT="$(dirname "$CKPT_DIR")"
+  mkdir -p "$TARGET_PARENT"
+  AVAIL_GB=$(df -BG --output=avail "$TARGET_PARENT" 2>/dev/null | tail -1 | tr -dc '0-9')
+  USE_PCT=$(df --output=pcent "$TARGET_PARENT" 2>/dev/null | tail -1 | tr -dc '0-9')
+  echo "  대상: $TARGET_PARENT  (여유 ${AVAIL_GB}G, 사용률 ${USE_PCT}%)"
+  if [[ -n "$AVAIL_GB" && "$AVAIL_GB" -lt 30 ]]; then
+    echo "  !! 여유가 30G 미만입니다. 중단합니다."
+    echo "     다른 디스크를 쓰려면:  CKPT_DIR=/mnt/ssd/\$USER/ckpt bash $0"
+    exit 1
+  fi
+  if [[ -n "$USE_PCT" && "$USE_PCT" -ge 90 ]]; then
+    echo "  !! 파티션 사용률이 ${USE_PCT}% 입니다. 공유 서버라면 관리자와 상의하세요. 중단합니다."
+    exit 1
+  fi
+fi
 
 # ---------------------------------------------------------------
 # 1. conda 환경
@@ -100,6 +125,10 @@ fi
 echo ""
 echo "  -- 저장소 모듈 import 확인 --"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/repo"
+if [[ ! -d "$REPO_DIR" ]]; then
+  echo "  원본 저장소가 없습니다 → 지금 클론합니다: $REPO_DIR"
+  git clone --depth 1 https://github.com/Robert-gyj/Ctrl-World.git "$REPO_DIR"
+fi
 python - "$REPO_DIR" <<'PY'
 import sys, os
 sys.path.insert(0, sys.argv[1])
