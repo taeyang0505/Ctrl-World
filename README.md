@@ -19,7 +19,7 @@
 
 | # | 내용 | 논문 보고값 | 재현 | 비고 |
 | --- | --- | --- | --- | --- |
-| **Table 1** | 장기 롤아웃 생성 품질 (검증 클립 256개, 10초) | PSNR 23.56 · SSIM 0.828 · LPIPS 0.091 · FID 25.00 · FVD 97.4 | ✅ **가능** | 체크포인트 공개. 검증 데이터는 선택 다운로드(~0.5GB)로 확보 가능. **지표 계산 코드는 저장소에 없어 직접 작성 필요** |
+| **Table 1** | 장기 롤아웃 생성 품질 (검증 클립 256개, 10초) | PSNR 23.56 · SSIM 0.828 · LPIPS 0.091 · FID 25.00 · FVD 97.4 | ✅ **가능** | 체크포인트 공개. 검증 데이터는 선택 다운로드(~0.8GB)로 확보 가능. 지표 계산 코드는 저장소에 없어 직접 작성 → **`eval/`에 구현 완료** |
 | **Table 2** | 구성요소 ablation (w/o memory · w/o frame-level cond · w/o joint pred) | 23.56 → 23.06 / 21.20 / — | ❌ **불가** | 각 행이 별도로 학습된 모델. 공개 체크포인트는 full 모델 1개뿐 → [설명 A](#a-table-2--모델을-다시-학습해야-한다) |
 | **Table 3** | 정책 평가: 실제 로봇 vs 월드모델 (7태스크 × 3정책) | 예: Drawer π0.5 실제 0.80 / WM 0.30 | ⚠️ **절반** | WM 열은 재현 가능(초기 조건 45개 공개 + openpi 필요). 실제 로봇 열은 불가 → [설명 B](#b-table-3--실제-로봇-420회-시행이-필요하다) |
 | **Table 4** | 후학습 효과 — 공간 이해 | 평균 0.288 → 0.875 | ❌ **불가** | 최종 평가가 실제 로봇 성공률 → [설명 C](#c-table-47--최종-평가가-실제-로봇에서-이루어진다) |
@@ -101,15 +101,44 @@ WM 열은 재현 가능하다. openpi와 정책 체크포인트가 공개되어 
 
 ---
 
+## 직접 구현한 코드 — `eval/`
+
+Table 1을 재현하려면 원본에 없는 코드를 채워야 한다. 원본 저장소에는 **지표 구현이 하나도 없고**(`grep -rniE 'psnr|ssim|lpips|fvd|fid'` 결과 0건, `requirements.txt`에도 관련 패키지 없음), 여러 클립을 도는 평가 루프·검증 데이터 선택 다운로드도 없다. 원본이 주는 것과 우리가 만든 것의 경계:
+
+| 구성 요소 | 상태 |
+| --- | --- |
+| 롤아웃 자체 (`agent.get_traj_info`, `agent.forward_wm`) | 원본 재사용 |
+| 자기회귀 버퍼·액션 조건화 | 원본 재사용 |
+| 정규화 통계 `dataset_meta_info/droid/stat.json` | 원본 그대로 사용 (**재계산 금지** — 256개로 다시 계산하면 모델 입력 자체가 달라져 논문과 비교가 무의미해진다) |
+| 검증 클립 선택 다운로드 | **직접 구현** |
+| 전처리 스크립트의 `joints` 필드 누락 수정 | **직접 구현** |
+| 여러 클립을 도는 평가 하네스 | **직접 구현** |
+| PSNR / SSIM / LPIPS / FID (FVD는 2차) | **직접 구현** |
+
+구현한 파일 4개:
+
+| 파일 | 역할 | 검증 상태 |
+| --- | --- | --- |
+| [`eval/metrics.py`](eval/metrics.py) | PSNR / SSIM / LPIPS / FID 구현 | **자체 검증 통과** — 동일 입력 → PSNR inf · SSIM 1.0000 · LPIPS 0.000000, 노이즈 σ=5/15/40 → PSNR 34.20/24.89/16.89 단조 악화 |
+| [`eval/download_val_clips.py`](eval/download_val_clips.py) | DROID 검증 에피소드만 선택 다운로드 (`traj_id%100==99`, 256개 ≈ 0.8GB) | dry-run 지원, 선택 목록을 JSON으로 저장해 재현 가능 |
+| [`eval/patch_extract_latent.py`](eval/patch_extract_latent.py) | 전처리 스크립트 패치본 생성 — **원본 버그 수정** 포함 | 패치 적용·문법 검사 통과 |
+| [`eval/run_eval.py`](eval/run_eval.py) | 클립 루프 + 예측·정답 프레임 수집 + 지표 집계 → 논문 Table 1 형식 출력 | 문법 검사 통과, GPU 실행 대기 |
+
+**발견한 원본 버그**: `extract_latent.py`는 annotation JSON에 `joints` 필드를 쓰지 않는데, 롤아웃 스크립트(`rollout_replay_traj.py:107`)가 그걸 읽는다. 즉 공개된 전처리 스크립트로 만든 데이터로는 롤아웃이 KeyError로 죽는다. 동봉 예제 데이터에는 `joints`가 있어서 스크립트와 데이터 버전이 어긋나 있음을 알 수 있다. 패치로 복원했고 값은 예제 데이터로 검증했다 (`joints == concat(joint_position(7), gripper(1))[::3]`).
+
+논문이 명시하지 않아 **우리가 정한 항목 7가지** — 조건 프레임 제외, 정답 기준(raw/vae), 카메라 선택, 롤아웃 길이(정확히 10초가 안 나와 13라운드 후 앞 50프레임 사용), LPIPS 백본(alex), SSIM 구현(torchmetrics), 정규화 통계 고정 — 은 근거와 함께 [`eval/README.md`](eval/README.md)에 기록했다. 재현 수치를 논문과 비교할 때 반드시 함께 밝혀야 하는 것들이다.
+
+---
+
 ## 재현 계획
 
 ### 1단계 — 동작 확인
 공개 체크포인트로 예제 궤적을 롤아웃해 정상 동작을 확인한다. 원본 저장소에 예제 데이터 56개가 포함되어 있어 대용량 다운로드 없이 가능하다.
 
-### 2단계 — Table 1 재현
-- 검증 클립 선택 다운로드: DROID는 HuggingFace에 **에피소드 단위 파일**로 공개되어 있고, 검증 분할 규칙은 `traj_id % 100 == 99`(`extract_latent.py:42`)다. 에피소드 1개가 약 2.1MB이므로 **논문과 같은 256 클립은 약 0.5GB**면 된다 (370GB 전체는 학습용)
-- 전처리: `extract_latent.py`로 VAE 인코딩
-- **지표 계산 코드 작성**: 저장소에 PSNR/SSIM/LPIPS/FID/FVD 구현이 전혀 없다(grep 결과 0건). 직접 작성해야 하며, 이 자리가 이후 접촉 지표를 붙일 지점이 된다
+### 2단계 — Table 1 재현 (코드 구현 완료 · GPU 실행 대기)
+- 검증 클립 선택 다운로드: DROID는 HuggingFace에 **에피소드 단위 파일**로 공개되어 있고, 검증 분할 규칙은 `traj_id % 100 == 99`(`extract_latent.py:42`)다. **논문과 같은 256 클립은 약 0.8GB**면 된다 (370GB 전체는 학습용) → `eval/download_val_clips.py`
+- 전처리: `eval/patch_extract_latent.py`가 생성한 `extract_latent_val.py` 실행 (`joints` 누락 수정 포함)
+- 지표 계산: `eval/metrics.py` + `eval/run_eval.py` — 실행 순서는 [`eval/README.md`](eval/README.md) 참고
 - 비교: 논문 보고값과 같은 구간인지 확인. 논문이 어느 256개를 썼는지 명시하지 않았으므로 완전 일치는 기대하지 않고 그 사실을 결과에 함께 적는다
 
 ### 3단계 — Fig 4·5 재현 🔗
@@ -142,7 +171,7 @@ WM 열은 재현 가능하다. openpi와 정책 체크포인트가 공개되어 
 | CLIP 인코더 | `openai/clip-vit-base-patch32` | ~0.6GB |
 | SVD 베이스 | `stabilityai/stable-video-diffusion-img2vid` | ~8GB |
 | Ctrl-World | `yjguo/Ctrl-World` | ~8GB |
-| DROID 검증 클립 256개 | `cadene/droid_1.0.1` (선택 다운로드) | ~0.5GB |
+| DROID 검증 클립 256개 | `cadene/droid_1.0.1` (선택 다운로드, `eval/download_val_clips.py`) | ~0.8GB |
 
 ---
 
@@ -151,6 +180,7 @@ WM 열은 재현 가능하다. openpi와 정책 체크포인트가 공개되어 
 | 날짜 | 내용 |
 | --- | --- |
 | 2026-08-03 | 저장소 클론, 코드 정독, 재현 가능성 판정표 작성 |
+| 2026-08-03 | Table 1 재현용 평가 코드 구현 (`eval/`) — 지표 4종·선택 다운로드·전처리 패치(`joints` 버그 수정)·평가 하네스. `metrics.py` 자체 검증 통과 |
 
 ---
 
