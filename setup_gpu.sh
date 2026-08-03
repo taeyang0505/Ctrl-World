@@ -55,18 +55,52 @@ if [[ "$DOWNLOAD_CKPT" == "1" ]]; then
 fi
 
 # ---------------------------------------------------------------
-# 1. conda 환경
+# 1. 파이썬 환경 — conda 가 있으면 conda, 없으면 venv
 # ---------------------------------------------------------------
 echo ""
-echo "[1/5] conda 환경 생성 (python 3.11)"
-eval "$(conda shell.bash hook)"
-if conda env list | grep -qE "^${ENV_NAME}\s"; then
-  echo "  이미 존재함 — 재사용"
+echo "[1/5] 파이썬 환경 준비"
+USING_CONDA=0
+if command -v conda >/dev/null 2>&1; then
+  echo "  conda 발견 → conda 환경 사용"
+  USING_CONDA=1
+  eval "$(conda shell.bash hook)"
+  if conda env list | grep -qE "^${ENV_NAME}\s"; then
+    echo "  이미 존재함 — 재사용"
+  else
+    conda create -y -n "$ENV_NAME" python=3.11
+  fi
+  conda activate "$ENV_NAME"
 else
-  conda create -y -n "$ENV_NAME" python=3.11
+  echo "  conda 없음 → venv 사용"
+  VENV_DIR="${VENV_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.venv}"
+
+  # torch 2.7.1 은 python 3.9~3.13 을 지원한다. 새 것부터 찾는다.
+  PY_BIN=""
+  for v in python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+    if command -v "$v" >/dev/null 2>&1; then
+      ver=$("$v" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "")
+      case "$ver" in
+        3.9|3.10|3.11|3.12|3.13) PY_BIN="$v"; break ;;
+      esac
+    fi
+  done
+  [[ -z "$PY_BIN" ]] && { echo "  !! 3.9~3.13 파이썬을 찾지 못했습니다."; exit 1; }
+  echo "  사용할 파이썬: $PY_BIN ($($PY_BIN -V 2>&1))"
+
+  if [[ -d "$VENV_DIR" ]]; then
+    echo "  기존 venv 재사용: $VENV_DIR"
+  else
+    "$PY_BIN" -m venv "$VENV_DIR" || {
+      echo "  !! venv 생성 실패. python3-venv 패키지가 필요할 수 있습니다:"
+      echo "     sudo apt install python3-venv    (sudo 없으면 관리자에게 요청)"
+      exit 1; }
+    echo "  venv 생성: $VENV_DIR"
+  fi
+  # shellcheck disable=SC1091
+  source "$VENV_DIR/bin/activate"
 fi
-conda activate "$ENV_NAME"
 python -V
+echo "  python 경로: $(command -v python)"
 
 # ---------------------------------------------------------------
 # 2. torch 먼저 (cu128) — 이 순서가 중요
@@ -112,14 +146,29 @@ pip install \
   "swanlab==0.6.4" \
   mediapy wandb tqdm decord einops scipy pandas imageio imageio-ffmpeg opencv-python
 
-# mediapy가 외부 ffmpeg 바이너리를 요구 (write_video에서 사용)
+# mediapy가 외부 ffmpeg 바이너리를 PATH에서 찾는다 (write_video에서 사용).
+# 없으면 롤아웃이 마지막 영상 저장 단계에서 실패한다.
 echo ""
 echo "  -- ffmpeg 확인 --"
 if command -v ffmpeg >/dev/null 2>&1; then
   echo "  ffmpeg: $(command -v ffmpeg)"
-else
+elif [[ "$USING_CONDA" == "1" ]]; then
   echo "  ffmpeg 없음 → conda로 설치"
   conda install -y -c conda-forge ffmpeg
+else
+  # conda 가 없을 때는 imageio-ffmpeg 가 동봉한 정적 바이너리를 PATH 에 연결한다.
+  # sudo 없이 해결되는 방법이다.
+  echo "  ffmpeg 없음 → imageio-ffmpeg 동봉 바이너리를 연결"
+  FFMPEG_SRC=$(python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())" 2>/dev/null || echo "")
+  if [[ -n "$FFMPEG_SRC" && -x "$FFMPEG_SRC" ]]; then
+    BIN_DIR="$(dirname "$(command -v python)")"
+    ln -sf "$FFMPEG_SRC" "$BIN_DIR/ffmpeg"
+    echo "  연결 완료: $BIN_DIR/ffmpeg -> $FFMPEG_SRC"
+    ffmpeg -version 2>/dev/null | head -1 || echo "  !! 연결했으나 실행 확인 실패"
+  else
+    echo "  !! ffmpeg 확보 실패. 롤아웃의 영상 저장 단계에서 실패할 수 있습니다."
+    echo "     해결: sudo apt install ffmpeg  (또는 관리자에게 요청)"
+  fi
 fi
 
 echo ""
@@ -173,10 +222,21 @@ fi
 # ---------------------------------------------------------------
 echo ""
 echo "[5/5] 완료"
+
+if [[ "$USING_CONDA" == "1" ]]; then
+  ACTIVATE_CMD="conda activate $ENV_NAME"
+else
+  ACTIVATE_CMD="source $VENV_DIR/bin/activate"
+fi
+
 cat <<EOF
 
 다음 단계
 ---------
+0) 새 셸을 열 때마다 환경을 활성화하세요:
+
+   $ACTIVATE_CMD
+
 1) 체크포인트 경로를 확인하고 아래 명령의 \${...} 를 채우세요.
    CKPT_DIR = $CKPT_DIR
 

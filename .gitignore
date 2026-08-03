@@ -11,3 +11,6 @@ outputs/
 .DS_Store
 __pycache__/
 *.pyc
+
+# venv (서버에서 생성)
+.venv/
