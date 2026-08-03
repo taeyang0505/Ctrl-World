@@ -45,8 +45,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, help="저장 경로")
     ap.add_argument("--n", type=int, default=256, help="받을 검증 클립 수")
-    ap.add_argument("--min-length", type=int, default=160,
-                    help="너무 짧은 궤적 제외 (10초 롤아웃에 최소 프레임 필요)")
+    # episodes.jsonl 의 length 는 원본 15Hz 프레임 수다. 전처리에서 rgb_skip=3 으로
+    # 5Hz 로 줄이므로 실제 사용 가능한 프레임은 length/3 이다.
+    #   10초 롤아웃 필요량 = start_idx(8) + pred_step*interact_num(5*13) + 8 = 81 프레임(5Hz)
+    #   → 원본 기준 81*3 = 243 프레임. 여유를 두어 260 을 기본값으로 한다.
+    ap.add_argument("--min-length", type=int, default=260,
+                    help="원본 15Hz 기준 최소 프레임 수 (5Hz 환산 시 1/3). "
+                         "기본 260 = 5Hz 약 87프레임 = 10초 롤아웃 가능")
     ap.add_argument("--seed", type=int, default=0, help="256개를 고르는 시드")
     ap.add_argument("--dry-run", action="store_true", help="목록만 출력")
     args = ap.parse_args()
@@ -63,11 +68,11 @@ def main() -> None:
     print("meta/episodes.jsonl 내려받는 중...")
     meta_path = hf_hub_download(
         REPO_ID, "meta/episodes.jsonl", repo_type="dataset",
-        local_dir=out, local_dir_use_symlinks=False,
+        local_dir=out,
     )
     hf_hub_download(
         REPO_ID, "meta/info.json", repo_type="dataset",
-        local_dir=out, local_dir_use_symlinks=False,
+        local_dir=out,
     )
 
     episodes = []
@@ -83,7 +88,9 @@ def main() -> None:
     print(f"  검증 분할(%100==99): {len(val)}")
 
     long_enough = [e for e in val if e.get("length", 0) >= args.min_length]
-    print(f"  길이 {args.min_length} 이상: {len(long_enough)}")
+    print(f"  길이 {args.min_length} 이상(원본 15Hz) = 5Hz 약 {args.min_length//3}프레임: "
+          f"{len(long_enough)}")
+    print(f"    (10초 롤아웃에 필요한 5Hz 프레임 수: 81)")
 
     if len(long_enough) < args.n:
         print(f"  ! 요청 {args.n}개보다 적습니다. 있는 만큼만 받습니다.")
@@ -121,7 +128,7 @@ def main() -> None:
         for rel in episode_files(ep):
             try:
                 hf_hub_download(REPO_ID, rel, repo_type="dataset",
-                                local_dir=out, local_dir_use_symlinks=False)
+                                local_dir=out)
             except Exception as exc:  # noqa: BLE001
                 failed.append((ep, rel, str(exc)[:80]))
         if i % 10 == 0 or i == len(ids):
