@@ -26,11 +26,26 @@ ctrl-world/
 ## 한 줄 요약
 
 ```bash
-# GPU 머신에서
+# GPU 머신(연구실 서버)에서 — 반드시 tmux 안에서
+tmux new -s setup
 bash setup_gpu.sh                          # 환경 + 체크포인트(~17GB)
 python near_miss/make_rollout_near_miss.py # 실험 스크립트 생성
 # 이후 near_miss/README.md 의 실행 절차대로
 ```
+
+### 연구실 서버(apple, RTX 5090)에서 실행할 때
+
+서버 실측 정보와 제약은 상위 [README.md](README.md)의 "실행 환경" 절 참고. 요점만:
+
+- **tmux 필수** — Slurm이 없어서 SSH가 끊기면 프로세스가 죽는다
+- **cu128 유지** — 드라이버가 CUDA 13.0이어도 cu130 휠은 torch 2.9부터만 있다.
+  원본이 torch 2.7.1을 핀하므로 `setup_gpu.sh`의 cu128 설치가 그대로 정답
+- **대용량은 `/mnt/ssd`로** (쓰기 권한 확보 후) — `/`가 85%라 홈에 쌓으면 위험하다:
+  ```bash
+  CKPT_DIR=/mnt/ssd/$USER/ckpt bash setup_gpu.sh
+  export HF_HOME=/mnt/ssd/$USER/hf_cache
+  ```
+  권한이 나오기 전까지는 홈으로도 가능(총 ~20GB, 여유 263G 안)
 
 ---
 
