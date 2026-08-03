@@ -87,7 +87,14 @@ else
   [[ -z "$PY_BIN" ]] && { echo "  !! 3.9~3.13 파이썬을 찾지 못했습니다."; exit 1; }
   echo "  사용할 파이썬: $PY_BIN ($($PY_BIN -V 2>&1))"
 
-  if [[ -d "$VENV_DIR/bin" ]]; then
+  # 이전 실행이 중간에 실패하면 bin/ 만 있고 activate 가 없는 껍데기가 남는다.
+  # activate 존재 여부로 판단하고, 깨져 있으면 지우고 다시 만든다.
+  if [[ -e "$VENV_DIR" && ! -f "$VENV_DIR/bin/activate" ]]; then
+    echo "  깨진 venv 발견 → 삭제 후 재생성: $VENV_DIR"
+    rm -rf "$VENV_DIR"
+  fi
+
+  if [[ -f "$VENV_DIR/bin/activate" ]]; then
     echo "  기존 venv 재사용: $VENV_DIR"
   else
     # Ubuntu 는 python3-venv 가 별도 패키지라 ensurepip 이 없는 경우가 많다.
