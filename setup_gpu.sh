@@ -183,7 +183,8 @@ python -m pip install \
   "numpy==1.26.4" \
   "accelerate==1.3.0" \
   "swanlab==0.6.4" \
-  mediapy wandb tqdm decord einops scipy pandas imageio imageio-ffmpeg opencv-python
+  mediapy wandb tqdm decord einops scipy pandas imageio imageio-ffmpeg opencv-python \
+  pyarrow huggingface_hub torchmetrics
 
 # mediapy가 외부 ffmpeg 바이너리를 PATH에서 찾는다 (write_video에서 사용).
 # 없으면 롤아웃이 마지막 영상 저장 단계에서 실패한다.

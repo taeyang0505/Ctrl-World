@@ -185,7 +185,7 @@ Table 1을 재현하려면 원본에 없는 코드를 채워야 한다. 원본 �
 | **torch 빌드** | RTX 5090 / RTX PRO 6000은 compute capability 12.0(sm_120). `requirements.txt`대로 설치하면 기본 PyPI 휠(cu126)이 깔리는데 sm_120 커널이 없어 실행 즉시 실패한다. `--index-url https://download.pytorch.org/whl/cu128` 필요, 드라이버 570 이상 |
 | **macOS 불가** | `decord==0.6.0`은 macOS arm64 휠도 소스 배포도 없다. 설치·실행은 GPU 머신에서 |
 | **openpi 불필요** | `rollout_replay_traj.py`는 openpi import가 주석 처리되어 있다. 정책 실험을 할 때만 설치 |
-| **누락 의존성** | `imageio`, `opencv-python`이 코드에서 import되나 requirements에 없다. `wandb`·`swanlab`은 쓰지 않으면서 모듈 최상단에서 import되므로 설치는 해야 한다. `mediapy`는 외부 `ffmpeg` 바이너리를 요구한다 |
+| **누락 의존성** | `imageio`, `opencv-python`이 코드에서 import되나 requirements에 없다. **`pyarrow`도 없다** — `extract_latent.py`가 `pd.read_parquet`으로 DROID 원본을 읽는데 엔진이 없어 전처리가 즉시 실패한다. `wandb`·`swanlab`은 쓰지 않으면서 모듈 최상단에서 import되므로 설치는 해야 한다. `mediapy`는 외부 `ffmpeg` 바이너리를 요구한다 |
 | **기본 경로** | `config.py:11-13`의 기본값이 저자 서버 경로(`/cephfs/...`)다. CLI 인자로 덮어쓰면 된다 |
 | **예제 데이터** | `dataset_example/` 81MB에 롤아웃 가능한 궤적 56개. 전처리 불필요(스크립트가 mp4를 읽어 VAE 인코딩 수행) |
 
