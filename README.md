@@ -141,7 +141,7 @@ Table 1을 재현하려면 원본에 없는 코드를 채워야 한다. 원본 �
 | # | 문제 | 증상 | 상태 |
 | --- | --- | --- | --- |
 | A1 | `requirements.txt`에 **`pyarrow` 누락** | `extract_latent.py`가 `pd.read_parquet`으로 DROID 원본을 읽는데 엔진이 없어 전처리가 즉시 `ImportError` | ✅ 서버에서 재현. `setup_gpu.sh`에 추가 |
-| A2 | `extract_latent.py`가 **`joints` 필드를 쓰지 않음** | 새로 전처리한 데이터로 롤아웃하면 `rollout_replay_traj.py:107`의 `anno['joints']`에서 `KeyError` | 패치로 대응 (`eval/patch_extract_latent.py`) |
+| A2 | `extract_latent.py`가 **`joints` 필드를 쓰지 않음** | 새로 전처리한 데이터로 롤아웃하면 `rollout_replay_traj.py:107`의 `anno['joints']`에서 `KeyError` | ✅ 패치로 해결 확인 (254개 전처리 후 `joints` shape (T,8) 생성 확인) |
 | A3 | `requirements.txt`에 `imageio`, `opencv-python` 누락 | 모듈 import 단계에서 실패 | `setup_gpu.sh`에 추가 |
 | A4 | **지표 구현이 전혀 없음** | `grep -rniE 'psnr\|ssim\|lpips\|fvd\|fid'` 결과 0건. Table 1을 재현할 코드가 공개되지 않음 | `eval/metrics.py`로 직접 구현 |
 | A5 | `config.py:11-13` 기본 경로가 저자 서버 경로(`/cephfs/...`) | 그대로 실행하면 경로 없음 오류 | CLI 인자로 덮어쓰면 됨 |
@@ -174,7 +174,20 @@ Table 1을 재현하려면 원본에 없는 코드를 채워야 한다. 원본 �
 > **주의 — 예제 데이터는 평가 데이터가 아니다.** `dataset_example/droid_subset`은 저장소 readme가 *"a very small subset"*이라고 밝힌 동작 확인용 샘플 11개다. 논문 Table 1은 DROID 전체 검증 분할의 256개를 썼고 그 데이터는 저장소에 없다.
 > 예제 클립 4개 중 10초 롤아웃(73프레임 필요)이 가능한 것은 `899`(121프레임) 하나뿐이고, `18599`(72) `1799`(41) `199`(33)은 길이가 모자라 원본 코드가 마지막 프레임으로 채운다(`get_traj_info`의 clamp). 실제 로그에서도 `199`의 7스텝 이후 액션 벡터가 고정된 것이 확인된다. 데모 목적에는 지장이 없으나 **이 클립들로 지표를 재면 안 된다.**
 
-### 2단계 — Table 1 재현 (코드 구현 완료 · GPU 실행 대기)
+### 2단계 — Table 1 재현 (진행 중)
+
+**소규모 확인 결과 (2026-08-03, 클립 4개, third-view)**
+
+| | PSNR ↑ | SSIM ↑ | LPIPS ↓ |
+| --- | --- | --- | --- |
+| 재현 (n=4) | **23.90** | **0.806** | **0.086** |
+| 논문 Table 1 (n=256) | 23.56 | 0.828 | 0.091 |
+
+표본이 4개뿐이라 확정치가 아니다. 다만 세 지표 모두 논문 값과 근접해 **파이프라인이 올바르게 동작한다는 신호**로 본다(경로·정규화가 어긋났다면 이만큼 근접할 수 없다). 본 측정은 254클립으로 진행 중.
+
+**측정 조건**: 클립당 50프레임(10.0초), 정답 = 원본 mp4 디코드, LPIPS 백본 alex, 라운드별 첫 프레임(조건 프레임) 제외, 정규화 통계는 원본 `stat.json` 사용, seed 0.
+
+
 - 검증 클립 선택 다운로드: DROID는 HuggingFace에 **에피소드 단위 파일**로 공개되어 있고, 검증 분할 규칙은 `traj_id % 100 == 99`(`extract_latent.py:42`)다. **논문과 같은 256 클립은 약 0.8GB**면 된다 (370GB 전체는 학습용) → `eval/download_val_clips.py`
 - 전처리: `eval/patch_extract_latent.py`가 생성한 `extract_latent_val.py` 실행 (`joints` 누락 수정 포함)
 - 지표 계산: `eval/metrics.py` + `eval/run_eval.py` — 실행 순서는 [`eval/README.md`](eval/README.md) 참고
@@ -244,6 +257,8 @@ Table 1을 재현하려면 원본에 없는 코드를 채워야 한다. 원본 �
 | 2026-08-03 | Table 1 재현용 평가 코드 구현 (`eval/`) — 지표 4종·선택 다운로드·전처리 패치(`joints` 버그 수정)·평가 하네스. `metrics.py` 자체 검증 통과 |
 | 2026-08-03 | 연구실 서버 환경 확인 (RTX 5090 32GB 단일, 드라이버 CUDA 13.0) — cu130 휠은 torch 2.9부터라 **cu128 유지** 확정, `/mnt/ssd` 쓰기 권한 요청 필요 |
 | 2026-08-03 | **서버 환경 구축 완료** — torch 2.7.1+cu128, capability (12,0), sm_120 커널 확인, bf16 연산 검증. conda·python3-venv 미설치 서버라 venv + pip 부트스트랩으로 우회 |
+| 2026-08-03 | 검증 클립 254개 다운로드·전처리 완료 (256개 중 2건은 DROID 원본 결손). 길이 필터를 15Hz 기준으로 정정 — 5Hz 환산 착오로 짧은 클립이 섞일 뻔함. 전처리 결과 254개 전부 10초 롤아웃 가능 |
+| 2026-08-03 | **Table 1 소규모 확인 성공** — 클립 4개에서 PSNR 23.90 / SSIM 0.806 / LPIPS 0.086 (논문 23.56 / 0.828 / 0.091). 254클립 본 측정 진행 |
 | 2026-08-03 | **원본 코드 재현 성공** — 저자 스크립트 `rollout_replay_traj.py`로 예제 궤적 3개 롤아웃. 영상 확인 결과 10초 구간에서 팔 자세·물체 배치가 정답과 일치, 물체 소실 없음. **속도 실측: 확산 50스텝 11.1 it/s → 상호작용 1스텝 4.5초** (Table 1 256클립 추정 4~5시간) |
 
 ---
