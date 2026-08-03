@@ -87,20 +87,52 @@ else
   [[ -z "$PY_BIN" ]] && { echo "  !! 3.9~3.13 파이썬을 찾지 못했습니다."; exit 1; }
   echo "  사용할 파이썬: $PY_BIN ($($PY_BIN -V 2>&1))"
 
-  if [[ -d "$VENV_DIR" ]]; then
+  if [[ -d "$VENV_DIR/bin" ]]; then
     echo "  기존 venv 재사용: $VENV_DIR"
   else
-    "$PY_BIN" -m venv "$VENV_DIR" || {
-      echo "  !! venv 생성 실패. python3-venv 패키지가 필요할 수 있습니다:"
-      echo "     sudo apt install python3-venv    (sudo 없으면 관리자에게 요청)"
-      exit 1; }
-    echo "  venv 생성: $VENV_DIR"
+    # Ubuntu 는 python3-venv 가 별도 패키지라 ensurepip 이 없는 경우가 많다.
+    # 그때는 --without-pip 로 만들고 pip 를 따로 부트스트랩한다 (sudo 불필요).
+    if "$PY_BIN" -m venv "$VENV_DIR" 2>/dev/null; then
+      echo "  venv 생성: $VENV_DIR"
+    else
+      echo "  ensurepip 없음 → --without-pip 로 생성 후 pip 부트스트랩"
+      rm -rf "$VENV_DIR"
+      "$PY_BIN" -m venv --without-pip "$VENV_DIR" || {
+        echo "  !! venv 생성 실패."
+        echo "     대안 1: sudo apt install python3.10-venv"
+        echo "     대안 2: Miniconda 를 홈에 설치 (sudo 불필요)"
+        echo "       wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+        echo "       bash Miniconda3-latest-Linux-x86_64.sh -b -p \$HOME/miniconda3"
+        echo "       eval \"\$(\$HOME/miniconda3/bin/conda shell.bash hook)\" && bash $0 $*"
+        exit 1; }
+      echo "  venv 생성(pip 없이): $VENV_DIR"
+    fi
   fi
   # shellcheck disable=SC1091
   source "$VENV_DIR/bin/activate"
+
+  # pip 확보
+  if ! python -m pip --version >/dev/null 2>&1; then
+    echo "  pip 부트스트랩 중..."
+    GETPIP="$VENV_DIR/get-pip.py"
+    if command -v curl >/dev/null 2>&1; then
+      curl -sSL https://bootstrap.pypa.io/get-pip.py -o "$GETPIP"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q https://bootstrap.pypa.io/get-pip.py -O "$GETPIP"
+    else
+      python - "$GETPIP" <<'PY'
+import sys, urllib.request
+urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", sys.argv[1])
+PY
+    fi
+    python "$GETPIP" >/dev/null
+    rm -f "$GETPIP"
+    python -m pip --version || { echo "  !! pip 부트스트랩 실패"; exit 1; }
+  fi
 fi
 python -V
 echo "  python 경로: $(command -v python)"
+echo "  pip        : $(python -m pip --version)"
 
 # ---------------------------------------------------------------
 # 2. torch 먼저 (cu128) — 이 순서가 중요
@@ -109,8 +141,8 @@ echo "  python 경로: $(command -v python)"
 # ---------------------------------------------------------------
 echo ""
 echo "[2/5] torch 2.7.1 + cu128 설치"
-pip install --upgrade pip
-pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cu128
+python -m pip install --upgrade pip
+python -m pip install "torch==2.7.1" --index-url https://download.pytorch.org/whl/cu128
 
 echo "  -- torch/CUDA 확인 --"
 python - <<'PY'
@@ -138,7 +170,7 @@ PY
 # ---------------------------------------------------------------
 echo ""
 echo "[3/5] 의존 패키지 설치"
-pip install \
+python -m pip install \
   "diffusers==0.34.0" \
   "transformers==4.48.1" \
   "numpy==1.26.4" \
@@ -193,7 +225,7 @@ PY
 if [[ "$DOWNLOAD_CKPT" == "1" ]]; then
   echo ""
   echo "[4/5] 체크포인트 다운로드 (~17GB)"
-  pip install -q "huggingface_hub[cli]"
+  python -m pip install -q "huggingface_hub[cli]"
   mkdir -p "$CKPT_DIR"
 
   echo "  (1/3) CLIP  ~0.6GB"
