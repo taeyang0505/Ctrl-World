@@ -61,6 +61,9 @@ CLI = """    parser.add_argument('--task_type', type=str, default='replay')
     parser.add_argument('--nm_start', type=int, default=0)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--dump_frames', action='store_true', help='예측 프레임을 npy로 저장')
+    parser.add_argument('--nm_start_idx', type=int, default=None,
+                        help='롤아웃 시작 프레임 강제 지정. 접촉 사건 구간을 덮으려면 필요')
+    parser.add_argument('--nm_only_ids', nargs='*', default=None, help='이 클립만 실행')
     args_new = parser.parse_args()"""
 
 PERTURB = '''        # 접촉/near-miss 두 조건에서 확산 노이즈가 같아야 비교가 성립한다
@@ -93,6 +96,22 @@ FILENAME = '''        _nmtag = f"ax{args.nm_axis}_d{args.nm_delta:+.3f}_seed{arg
 
 
 # (앵커, 대체문자열) 목록. 앵커는 원본에 정확히 1회만 나와야 한다.
+LOOP = """    # ---- near-miss 실험용 재정의 ----
+    if args.nm_only_ids:
+        keep = [i for i, v in enumerate(args.val_id) if str(v) in [str(x) for x in args.nm_only_ids]]
+        if not keep:
+            raise SystemExit(f'지정한 클립이 config 목록에 없습니다: {args.nm_only_ids} (가능: {args.val_id})')
+        args.val_id = [args.val_id[i] for i in keep]
+        args.instruction = [args.instruction[i] for i in keep]
+        args.start_idx = [args.start_idx[i] for i in keep]
+    if args.nm_start_idx is not None:
+        args.start_idx = [args.nm_start_idx] * len(args.val_id)
+    print(f'[near-miss] 클립 {args.val_id}, 시작 프레임 {args.start_idx}')
+    # --------------------------------
+
+    for val_id_i, text_i, start_idx_i in zip(args.val_id, args.instruction, args.start_idx):"""
+
+
 EDITS = [
     ("\n\nclass agent():", HELPER),
     (
@@ -117,6 +136,7 @@ EDITS = [
         '        filename_video = f"{args.save_dir}/{task_name}/video/time_{uuid}_traj_{val_id_i}_{start_idx_i}_{pred_step}_{text_id}.mp4"',
         FILENAME,
     ),
+    ("    for val_id_i, text_i, start_idx_i in zip(args.val_id, args.instruction, args.start_idx):", LOOP),
 ]
 
 
