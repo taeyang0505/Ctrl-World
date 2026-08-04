@@ -263,7 +263,7 @@ def main() -> None:
             ax.set_ylabel(key)
             ax.set_title(f"ρ = {corr[key][fa]:.3f}" if key in corr else fa)
             ax.grid(alpha=0.3)
-        fig.suptitle(f"장면 특성 vs 품질 저하 (n={len(rows)})")
+        fig.suptitle(f"Scene factors vs quality degradation (n={len(rows)})")
         fig.tight_layout()
         p = os.path.join(a.out, "variance.png")
         fig.savefig(p, dpi=150)
