@@ -146,7 +146,7 @@ Table 1을 재현하려면 원본에 없는 코드를 채워야 한다. 원본 �
 | --- | --- | --- | --- |
 | A1 | `requirements.txt`에 **`pyarrow` 누락** | `extract_latent.py`가 `pd.read_parquet`으로 DROID 원본을 읽는데 엔진이 없어 전처리가 즉시 `ImportError` | ✅ 서버에서 재현. `setup_gpu.sh`에 추가 |
 | A2 | `extract_latent.py`가 **`joints` 필드를 쓰지 않음** | 새로 전처리한 데이터로 롤아웃하면 `rollout_replay_traj.py:107`의 `anno['joints']`에서 `KeyError` | ✅ 패치로 해결 확인 (254개 전처리 후 `joints` shape (T,8) 생성 확인) |
-| A3 | `requirements.txt`에 `imageio`, `opencv-python` 누락 | 모듈 import 단계에서 실패 | `setup_gpu.sh`에 추가 |
+| A3 | `requirements.txt`에 **`imageio`·`torchvision` 누락** | `dataset/dataset_droid_exp33.py:9,13`과 `dataset_meta_info/create_meta_info.py:7,12`가 import한다. 학습·메타정보 생성 경로에서 실패 | `setup_gpu.sh`에 추가. **정정: 이전 기록의 `opencv-python`은 오류였다** — `scripts/rollout_interact_pi*.py:14`에서 주석 처리되어 있어 실제로는 불필요 |
 | A4 | **지표 구현이 전혀 없음** | `grep -rniE 'psnr\|ssim\|lpips\|fvd\|fid'` 결과 0건. Table 1을 재현할 코드가 공개되지 않음 | `eval/metrics.py`로 직접 구현 |
 | A5 | `config.py:11-13` 기본 경로가 저자 서버 경로(`/cephfs/...`) | 그대로 실행하면 경로 없음 오류 | CLI 인자로 덮어쓰면 됨 |
 | A6 | 데모 기본 설정이 **예제 클립 길이를 초과** | `interact_num=12`는 68프레임을 요구하는데 예제 클립 `199`는 33프레임뿐. `get_traj_info`가 마지막 프레임으로 채워 액션 벡터가 고정됨 | ✅ 로그에서 확인 (`traj 199`의 7스텝 이후 동일 값 반복). 해당 클립으로 지표를 재면 안 됨 |
